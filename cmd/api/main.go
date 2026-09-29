@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -52,6 +53,9 @@ func main() {
 	if err := goose.Up(sqlDB, "migrations"); err != nil {
 		sqlDB.Close()
 		slog.Error("migrations", "err", err)
+		if hint := migrationHint(err); hint != "" {
+			slog.Error("migrations hint", "msg", hint)
+		}
 		os.Exit(1)
 	}
 	sqlDB.Close()
@@ -87,4 +91,12 @@ func main() {
 	if err := srv.Shutdown(shutCtx); err != nil {
 		slog.Error("shutdown error", "err", err)
 	}
+}
+
+func migrationHint(err error) string {
+	msg := err.Error()
+	if strings.Contains(msg, "42501") || strings.Contains(msg, "permission denied") {
+		return "DigitalOcean app users cannot create objects in schema public. As doadmin: CREATE EXTENSION citext; CREATE EXTENSION pgcrypto; GRANT ALL ON SCHEMA public TO <dbuser>;"
+	}
+	return ""
 }
