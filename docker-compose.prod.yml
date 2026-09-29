@@ -1,28 +1,10 @@
-# VPS A: API + Postgres + Caddy. Host ports are loopback-only except 80/443.
+# VPS1: API + Caddy. Postgres is DigitalOcean managed — set DATABASE_URL in .env.
 #   docker compose -f docker-compose.prod.yml up --build -d
 #
 # Point DNS A/AAAA for api.$ENMASSE_DOMAIN and internal.api.$ENMASSE_DOMAIN at this VPS.
+# Do not start a local Postgres here. Compose must not override DATABASE_URL.
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
-      POSTGRES_DB: enmasse
-    ports:
-      - "127.0.0.1:5481:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d enmasse"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-    networks:
-      - app
-
   api:
     build:
       context: .
@@ -32,12 +14,8 @@ services:
     environment:
       PORT: "8081"
       APP_ENV: ${APP_ENV:-production}
-      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/enmasse?sslmode=disable
     ports:
       - "127.0.0.1:8081:8081"
-    depends_on:
-      postgres:
-        condition: service_healthy
     restart: unless-stopped
     networks:
       - app
@@ -47,6 +25,7 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      - "443:443/udp"
     environment:
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL}
       ENMASSE_DOMAIN: ${ENMASSE_DOMAIN:-enmasse.id}
@@ -62,7 +41,6 @@ services:
       - app
 
 volumes:
-  postgres_data:
   caddy_data:
   caddy_config:
 
