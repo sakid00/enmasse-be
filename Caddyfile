@@ -1,0 +1,52 @@
+# Public host is health only. Auth and internal stay on the Massmaker-only
+# internal host. Site names come from ENMASSE_DOMAIN in the compose env.
+
+{
+	email {$ACME_EMAIL}
+}
+
+api.{$ENMASSE_DOMAIN} {
+	encode gzip zstd
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options DENY
+		Content-Security-Policy "frame-ancestors 'none'"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+	@notLocalhost not host localhost 127.0.0.1
+	header @notLocalhost Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+	@private path /v1/internal /v1/internal/* /v1/admin /v1/admin/* /swagger /swagger/*
+	handle @private {
+		respond 404
+	}
+	handle /health {
+		reverse_proxy api:8081
+	}
+	handle {
+		respond 404
+	}
+}
+
+internal.api.{$ENMASSE_DOMAIN} {
+	@notMaker not remote_ip {$MASSMAKER_EGRESS_IP}
+	handle @notMaker {
+		respond 404
+	}
+	handle /health {
+		reverse_proxy api:8081
+	}
+	handle /v1/auth* {
+		reverse_proxy api:8081
+	}
+	handle /v1/me* {
+		reverse_proxy api:8081
+	}
+	handle /v1/internal* {
+		reverse_proxy api:8081
+	}
+	handle {
+		respond 404
+	}
+}

@@ -1,0 +1,6 @@
+.env
+data/
+*.exe
+*.test
+enmasse-be
+/bin/
