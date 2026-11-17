@@ -36,6 +36,7 @@ func NewRouter(authSvc *service.AuthService, opts RouterOptions) http.Handler {
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Route("/auth", func(r chi.Router) {
+			r.With(httprate.LimitByIP(30, time.Minute)).Get("/password-key", authH.PasswordKey)
 			r.With(httprate.LimitByIP(10, 10*time.Minute)).Post("/register/artist", authH.RegisterArtist)
 			r.With(httprate.LimitByIP(10, 10*time.Minute)).Post("/register/vendor", authH.RegisterVendor)
 			r.With(httprate.LimitByIP(10, 10*time.Minute)).Post("/email/status", authH.EmailStatus)
@@ -43,7 +44,13 @@ func NewRouter(authSvc *service.AuthService, opts RouterOptions) http.Handler {
 			r.With(httprate.LimitByIP(5, 10*time.Minute)).Post("/claim", authH.Claim)
 			r.With(httprate.LimitByIP(5, 10*time.Minute)).Post("/password/claim", authH.ClaimPassword)
 			r.With(httprate.LimitByIP(5, 10*time.Minute)).Post("/password/set", authH.SetPassword)
+			r.With(httprate.LimitByIP(5, 10*time.Minute)).Post("/password/forgot", authH.ForgotPassword)
+			r.With(httprate.LimitByIP(5, 10*time.Minute)).Post("/password/reset", authH.ResetPassword)
+			r.With(httprate.LimitByIP(5, 10*time.Minute)).Post("/otp/resend", authH.ResendOTP)
+			r.With(httprate.LimitByIP(10, 10*time.Minute)).Post("/otp/verify", authH.VerifyOTP)
 			r.With(mw.HumanAuth(opts.JWTAccessSecret, opts.JWTIssuer)).Post("/password/change", authH.ChangePassword)
+			r.With(httprate.LimitByIP(5, 10*time.Minute), mw.HumanAuth(opts.JWTAccessSecret, opts.JWTIssuer)).Post("/email/verify/send", authH.SendVerifyEmail)
+			r.With(httprate.LimitByIP(10, 10*time.Minute), mw.HumanAuth(opts.JWTAccessSecret, opts.JWTIssuer)).Post("/email/verify", authH.VerifyEmail)
 		})
 
 		r.Route("/me", func(r chi.Router) {

@@ -3,16 +3,9 @@ package mail
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/smtp"
-	"strings"
-
-	"github.com/sakid00/enmasse-be/internal/config"
+	"time"
 )
-
-type Sender interface {
-	SendClaim(ctx context.Context, to, setPasswordURL string) error
-}
 
 type SMTP struct {
 	host string
@@ -20,24 +13,26 @@ type SMTP struct {
 	user string
 	pass string
 	from string
-}
-
-func New(cfg *config.Config) Sender {
-	if strings.TrimSpace(cfg.SMTPHost) == "" {
-		return Log{}
-	}
-	return SMTP{
-		host: cfg.SMTPHost,
-		port: cfg.SMTPPort,
-		user: cfg.SMTPUser,
-		pass: cfg.SMTPPass,
-		from: cfg.SMTPFrom,
-	}
+	ttl  time.Duration
 }
 
 func (s SMTP) SendClaim(_ context.Context, to, setPasswordURL string) error {
 	subject := "Set your MASSmaker password"
 	body := "Set your password (link expires soon):\r\n\r\n" + setPasswordURL + "\r\n"
+	return s.send(to, subject, body)
+}
+
+func (s SMTP) SendOTP(_ context.Context, to, code string) error {
+	minutes := int(s.ttl.Minutes())
+	if minutes < 1 {
+		minutes = 10
+	}
+	subject := "Your MASSmaker verification code"
+	body := fmt.Sprintf("Your verification code is %s.\r\nIt expires in %d minutes.\r\n", code, minutes)
+	return s.send(to, subject, body)
+}
+
+func (s SMTP) send(to, subject, body string) error {
 	msg := "From: " + s.from + "\r\n" +
 		"To: " + to + "\r\n" +
 		"Subject: " + subject + "\r\n" +
@@ -46,14 +41,7 @@ func (s SMTP) SendClaim(_ context.Context, to, setPasswordURL string) error {
 	addr := fmt.Sprintf("%s:%d", s.host, s.port)
 	auth := smtp.PlainAuth("", s.user, s.pass, s.host)
 	if err := smtp.SendMail(addr, auth, s.from, []string{to}, []byte(msg)); err != nil {
-		return fmt.Errorf("mail: send claim: %w", err)
+		return fmt.Errorf("mail: smtp send: %w", err)
 	}
-	return nil
-}
-
-type Log struct{}
-
-func (Log) SendClaim(_ context.Context, to, setPasswordURL string) error {
-	slog.Info("claim mail (smtp unset — logged only)", "to", to, "url", setPasswordURL)
 	return nil
 }

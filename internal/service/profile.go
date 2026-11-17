@@ -99,6 +99,9 @@ func (s *AuthService) PatchProfile(ctx context.Context, userID uuid.UUID, in Pat
 		}
 		return nil, fmt.Errorf("patch profile: %w", err)
 	}
+	if err := s.requireVerified(user); err != nil {
+		return nil, err
+	}
 
 	switch user.Role {
 	case "artist":
@@ -163,15 +166,32 @@ func (s *AuthService) PatchProfile(ctx context.Context, userID uuid.UUID, in Pat
 	return s.buildProfile(ctx, user)
 }
 
-func (s *AuthService) ProfileStatus(ctx context.Context, userID uuid.UUID) (complete bool, missing []string, err error) {
+type ProfileStatus struct {
+	Complete      bool     `json:"complete"`
+	Missing       []string `json:"missing"`
+	EmailVerified bool     `json:"emailVerified"`
+}
+
+func (s *AuthService) ProfileStatus(ctx context.Context, userID uuid.UUID) (*ProfileStatus, error) {
 	user, err := s.db.Queries.GetUserByID(ctx, userID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil, domain.ErrNotFound
+			return nil, domain.ErrNotFound
 		}
-		return false, nil, fmt.Errorf("profile status: %w", err)
+		return nil, fmt.Errorf("profile status: %w", err)
 	}
-	return s.completeness(ctx, user)
+	complete, missing, err := s.completeness(ctx, user)
+	if err != nil {
+		return nil, err
+	}
+	if missing == nil {
+		missing = []string{}
+	}
+	return &ProfileStatus{
+		Complete:      complete,
+		Missing:       missing,
+		EmailVerified: isEmailVerified(user),
+	}, nil
 }
 
 func (s *AuthService) InternalArtist(ctx context.Context, artistID uuid.UUID) (*ArtistProfile, error) {
@@ -198,12 +218,7 @@ func (s *AuthService) InternalVendor(ctx context.Context, vendorID uuid.UUID) (*
 
 func (s *AuthService) buildProfile(ctx context.Context, user store.User) (*Profile, error) {
 	out := &Profile{
-		User: UserView{
-			ID:     user.ID.String(),
-			Email:  user.Email,
-			Handle: user.Handle,
-			Role:   user.Role,
-		},
+		User:    userView(user),
 		Role:    user.Role,
 		Missing: []string{},
 	}

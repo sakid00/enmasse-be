@@ -12,6 +12,7 @@ import (
 const (
 	TypAccess  = "access"
 	TypService = "service"
+	TypSignup  = "signup"
 
 	AudEnmasse   = "enmasse"
 	AudMassmaker = "massmaker"
@@ -26,6 +27,11 @@ type AccessClaims struct {
 }
 
 type ServiceClaims struct {
+	jwt.RegisteredClaims
+	Typ string `json:"typ"`
+}
+
+type SignupClaims struct {
 	jwt.RegisteredClaims
 	Typ string `json:"typ"`
 }
@@ -94,4 +100,37 @@ func MintService(secret string, ttl time.Duration) (string, error) {
 		Typ: TypService,
 	})
 	return tok.SignedString([]byte(secret))
+}
+
+func MintSignup(secret, issuer, email string, ttl time.Duration) (string, error) {
+	now := time.Now()
+	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, SignupClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    issuer,
+			Subject:   email,
+			Audience:  jwt.ClaimStrings{AudEnmasse},
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
+			ID:        uuid.NewString(),
+		},
+		Typ: TypSignup,
+	})
+	return tok.SignedString([]byte(secret))
+}
+
+func ParseSignup(secret, issuer, token string) (*SignupClaims, error) {
+	parsed, err := jwt.ParseWithClaims(token, &SignupClaims{}, func(t *jwt.Token) (any, error) {
+		if t.Method != jwt.SigningMethodHS256 {
+			return nil, domain.ErrInvalidToken
+		}
+		return []byte(secret), nil
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithIssuer(issuer), jwt.WithAudience(AudEnmasse))
+	if err != nil || !parsed.Valid {
+		return nil, domain.ErrInvalidToken
+	}
+	claims, ok := parsed.Claims.(*SignupClaims)
+	if !ok || claims.Typ != TypSignup || claims.Subject == "" {
+		return nil, domain.ErrInvalidToken
+	}
+	return claims, nil
 }

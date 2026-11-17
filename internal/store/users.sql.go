@@ -25,7 +25,7 @@ func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, password_hash, role, handle, must_change_password)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, email, password_hash, role, handle, must_change_password, created_at, updated_at
+RETURNING id, email, password_hash, role, handle, must_change_password, created_at, updated_at, email_verified_at
 `
 
 type CreateUserParams struct {
@@ -54,12 +54,13 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.MustChangePassword,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EmailVerifiedAt,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, role, handle, must_change_password, created_at, updated_at FROM users WHERE email = $1
+SELECT id, email, password_hash, role, handle, must_change_password, created_at, updated_at, email_verified_at FROM users WHERE email = $1
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
@@ -74,12 +75,13 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.MustChangePassword,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EmailVerifiedAt,
 	)
 	return i, err
 }
 
 const getUserByHandle = `-- name: GetUserByHandle :one
-SELECT id, email, password_hash, role, handle, must_change_password, created_at, updated_at FROM users WHERE handle = $1
+SELECT id, email, password_hash, role, handle, must_change_password, created_at, updated_at, email_verified_at FROM users WHERE handle = $1
 `
 
 func (q *Queries) GetUserByHandle(ctx context.Context, handle string) (User, error) {
@@ -94,12 +96,13 @@ func (q *Queries) GetUserByHandle(ctx context.Context, handle string) (User, err
 		&i.MustChangePassword,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EmailVerifiedAt,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, password_hash, role, handle, must_change_password, created_at, updated_at FROM users WHERE id = $1
+SELECT id, email, password_hash, role, handle, must_change_password, created_at, updated_at, email_verified_at FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
@@ -114,8 +117,20 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		&i.MustChangePassword,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EmailVerifiedAt,
 	)
 	return i, err
+}
+
+const markEmailVerified = `-- name: MarkEmailVerified :exec
+UPDATE users
+SET email_verified_at = NOW(), updated_at = NOW()
+WHERE id = $1 AND email_verified_at IS NULL
+`
+
+func (q *Queries) MarkEmailVerified(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, markEmailVerified, id)
+	return err
 }
 
 const setPassword = `-- name: SetPassword :exec

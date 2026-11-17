@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"net"
 	"net/http"
 
 	"github.com/google/uuid"
 
+	"github.com/sakid00/enmasse-be/internal/domain"
 	mw "github.com/sakid00/enmasse-be/internal/http/middleware"
 	"github.com/sakid00/enmasse-be/internal/service"
 )
@@ -17,20 +19,46 @@ func NewAuthHandler(svc *service.AuthService) *AuthHandler {
 	return &AuthHandler{svc: svc}
 }
 
+func (h *AuthHandler) PasswordKey(w http.ResponseWriter, r *http.Request) {
+	if h.svc == nil {
+		writeError(w, domain.ErrUnavailable)
+		return
+	}
+	jwk, err := h.svc.PasswordPublicJWK()
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, jwk)
+}
+
 func (h *AuthHandler) RegisterArtist(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Email      string `json:"email"`
-		Password   string `json:"password"`
-		FirstName  string `json:"firstName"`
-		LastName   string `json:"lastName"`
-		ArtistName string `json:"artistName"`
-		Handle     string `json:"handle"`
+		SignupToken    string `json:"signupToken"`
+		Password       string `json:"password"`
+		PasswordCipher string `json:"passwordCipher"`
+		FirstName      string `json:"firstName"`
+		LastName       string `json:"lastName"`
+		ArtistName     string `json:"artistName"`
+		Handle         string `json:"handle"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, errBadJSON())
 		return
 	}
-	sess, err := h.svc.RegisterArtist(r.Context(), service.RegisterArtistInput(body))
+	password, err := h.unwrapPassword(body.Password, body.PasswordCipher)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	sess, err := h.svc.RegisterArtist(r.Context(), service.RegisterArtistInput{
+		SignupToken: body.SignupToken,
+		Password:    password,
+		FirstName:   body.FirstName,
+		LastName:    body.LastName,
+		ArtistName:  body.ArtistName,
+		Handle:      body.Handle,
+	})
 	if err != nil {
 		writeError(w, err)
 		return
@@ -40,16 +68,27 @@ func (h *AuthHandler) RegisterArtist(w http.ResponseWriter, r *http.Request) {
 
 func (h *AuthHandler) RegisterVendor(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-		Handle   string `json:"handle"`
-		Name     string `json:"name"`
+		SignupToken    string `json:"signupToken"`
+		Password       string `json:"password"`
+		PasswordCipher string `json:"passwordCipher"`
+		Handle         string `json:"handle"`
+		Name           string `json:"name"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, errBadJSON())
 		return
 	}
-	sess, err := h.svc.RegisterVendor(r.Context(), service.RegisterVendorInput(body))
+	password, err := h.unwrapPassword(body.Password, body.PasswordCipher)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	sess, err := h.svc.RegisterVendor(r.Context(), service.RegisterVendorInput{
+		SignupToken: body.SignupToken,
+		Password:    password,
+		Handle:      body.Handle,
+		Name:        body.Name,
+	})
 	if err != nil {
 		writeError(w, err)
 		return
@@ -61,13 +100,19 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Email          string `json:"email"`
 		Password       string `json:"password"`
+		PasswordCipher string `json:"passwordCipher"`
 		TurnstileToken string `json:"turnstileToken"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, errBadJSON())
 		return
 	}
-	sess, err := h.svc.Login(r.Context(), body.Email, body.Password, body.TurnstileToken, r.RemoteAddr)
+	password, err := h.unwrapPassword(body.Password, body.PasswordCipher)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	sess, err := h.svc.Login(r.Context(), body.Email, password, body.TurnstileToken, remoteIP(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -93,19 +138,145 @@ func (h *AuthHandler) EmailStatus(w http.ResponseWriter, r *http.Request) {
 
 func (h *AuthHandler) ClaimPassword(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email          string `json:"email"`
+		Password       string `json:"password"`
+		PasswordCipher string `json:"passwordCipher"`
+		Code           string `json:"code"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, errBadJSON())
 		return
 	}
-	sess, err := h.svc.ClaimPassword(r.Context(), body.Email, body.Password)
+	password, err := h.unwrapPassword(body.Password, body.PasswordCipher)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	sess, err := h.svc.ClaimPassword(r.Context(), body.Email, password, body.Code)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, sess)
+}
+
+func (h *AuthHandler) ResendOTP(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Email   string `json:"email"`
+		Purpose string `json:"purpose"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, errBadJSON())
+		return
+	}
+	out, err := h.svc.ResendOTP(r.Context(), body.Email, body.Purpose)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *AuthHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Email   string `json:"email"`
+		Code    string `json:"code"`
+		Purpose string `json:"purpose"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, errBadJSON())
+		return
+	}
+	if body.Purpose != "" && body.Purpose != "signup" {
+		writeError(w, errVal("invalid otp purpose"))
+		return
+	}
+	out, err := h.svc.VerifySignupOTP(r.Context(), body.Email, body.Code)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if out != nil && out.Proof != nil {
+		writeJSON(w, http.StatusOK, out.Proof)
+		return
+	}
+	if out == nil || out.Session == nil {
+		writeError(w, domain.ErrUnavailable)
+		return
+	}
+	writeJSON(w, http.StatusOK, out.Session)
+}
+
+func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Email string `json:"email"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, errBadJSON())
+		return
+	}
+	if err := h.svc.ForgotPassword(r.Context(), body.Email); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Email          string `json:"email"`
+		Code           string `json:"code"`
+		Password       string `json:"password"`
+		PasswordCipher string `json:"passwordCipher"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, errBadJSON())
+		return
+	}
+	password, err := h.unwrapPassword(body.Password, body.PasswordCipher)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := h.svc.ResetPassword(r.Context(), body.Email, body.Code, password); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *AuthHandler) SendVerifyEmail(w http.ResponseWriter, r *http.Request) {
+	id, err := userID(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	out, err := h.svc.SendVerifyEmail(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
+	id, err := userID(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, errBadJSON())
+		return
+	}
+	if err := h.svc.VerifyEmail(r.Context(), id, body.Code); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true, "emailVerified": true})
 }
 
 func (h *AuthHandler) Claim(w http.ResponseWriter, r *http.Request) {
@@ -125,14 +296,20 @@ func (h *AuthHandler) Claim(w http.ResponseWriter, r *http.Request) {
 
 func (h *AuthHandler) SetPassword(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Token    string `json:"token"`
-		Password string `json:"password"`
+		Token          string `json:"token"`
+		Password       string `json:"password"`
+		PasswordCipher string `json:"passwordCipher"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, errBadJSON())
 		return
 	}
-	if err := h.svc.SetPassword(r.Context(), body.Token, body.Password); err != nil {
+	password, err := h.unwrapPassword(body.Password, body.PasswordCipher)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := h.svc.SetPassword(r.Context(), body.Token, password); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -141,11 +318,23 @@ func (h *AuthHandler) SetPassword(w http.ResponseWriter, r *http.Request) {
 
 func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Current  string `json:"currentPassword"`
-		Password string `json:"password"`
+		Current               string `json:"currentPassword"`
+		CurrentPasswordCipher string `json:"currentPasswordCipher"`
+		Password              string `json:"password"`
+		PasswordCipher        string `json:"passwordCipher"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, errBadJSON())
+		return
+	}
+	current, err := h.unwrapPassword(body.Current, body.CurrentPasswordCipher)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	password, err := h.unwrapPassword(body.Password, body.PasswordCipher)
+	if err != nil {
+		writeError(w, err)
 		return
 	}
 	id, err := userID(r)
@@ -153,11 +342,26 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if err := h.svc.ChangePassword(r.Context(), id, body.Current, body.Password); err != nil {
+	if err := h.svc.ChangePassword(r.Context(), id, current, password); err != nil {
 		writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *AuthHandler) unwrapPassword(plain, cipher string) (string, error) {
+	if h.svc == nil {
+		return "", domain.ErrUnavailable
+	}
+	return h.svc.UnwrapPassword(plain, cipher)
+}
+
+func remoteIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 func userID(r *http.Request) (uuid.UUID, error) {

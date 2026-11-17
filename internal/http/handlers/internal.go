@@ -24,18 +24,12 @@ func (h *InternalHandler) ProfileStatus(w http.ResponseWriter, r *http.Request) 
 		writeError(w, err)
 		return
 	}
-	complete, missing, err := h.svc.ProfileStatus(r.Context(), id)
+	status, err := h.svc.ProfileStatus(r.Context(), id)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	if missing == nil {
-		missing = []string{}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"complete": complete,
-		"missing":  missing,
-	})
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (h *InternalHandler) Artist(w http.ResponseWriter, r *http.Request) {

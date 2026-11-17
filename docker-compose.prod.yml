@@ -14,6 +14,9 @@ services:
     environment:
       PORT: "8081"
       APP_ENV: ${APP_ENV:-production}
+      PASSWORD_WRAP_PRIVATE_KEY_FILE: /run/secrets/password-wrap.pem
+    volumes:
+      - ./secrets/password-wrap.pem:/run/secrets/password-wrap.pem:ro
     ports:
       - "127.0.0.1:8081:8081"
     restart: unless-stopped

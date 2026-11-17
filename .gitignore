@@ -1,5 +1,7 @@
 .env
 data/
+secrets/*.pem
+!secrets/*.pem.example
 *.exe
 *.test
 enmasse-be

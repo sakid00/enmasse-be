@@ -17,5 +17,10 @@ UPDATE users
 SET password_hash = $2, must_change_password = $3, updated_at = NOW()
 WHERE id = $1;
 
+-- name: MarkEmailVerified :exec
+UPDATE users
+SET email_verified_at = NOW(), updated_at = NOW()
+WHERE id = $1 AND email_verified_at IS NULL;
+
 -- name: CountUsers :one
 SELECT count(*)::bigint FROM users;

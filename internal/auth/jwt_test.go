@@ -52,3 +52,56 @@ func TestServiceRoundTrip(t *testing.T) {
 		t.Fatalf("claims %+v", got)
 	}
 }
+
+func TestSignupRoundTrip(t *testing.T) {
+	t.Parallel()
+	const secret = "test-access-secret-32-bytes-min!!"
+	const issuer = "https://api.enmasse.id"
+	tok, err := auth.MintSignup(
+		secret,
+		issuer,
+		"artist@example.com",
+		30*time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := auth.ParseSignup(secret, issuer, tok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Subject != "artist@example.com" || got.Typ != auth.TypSignup {
+		t.Fatalf("claims %+v", got)
+	}
+}
+
+func TestSignupRejectsAccess(t *testing.T) {
+	t.Parallel()
+	const secret = "test-access-secret-32-bytes-min!!"
+	const issuer = "https://api.enmasse.id"
+	tok, err := auth.MintAccess(secret, issuer, "user-1", "artist", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.ParseSignup(secret, issuer, tok); err == nil {
+		t.Fatal("access token must not parse as signup")
+	}
+}
+
+func TestAccessRejectsSignup(t *testing.T) {
+	t.Parallel()
+	const secret = "test-access-secret-32-bytes-min!!"
+	const issuer = "https://api.enmasse.id"
+	tok, err := auth.MintSignup(
+		secret,
+		issuer,
+		"artist@example.com",
+		30*time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.ParseAccess(secret, issuer, tok); err == nil {
+		t.Fatal("signup token must not parse as access")
+	}
+}

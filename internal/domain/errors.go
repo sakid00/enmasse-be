@@ -25,6 +25,7 @@ var (
 	ErrBadRequest         = NewAppError(http.StatusBadRequest, "validation", "bad request")
 	ErrTurnstileRequired  = NewAppError(http.StatusBadRequest, "validation", "turnstile token required")
 	ErrTurnstileFailed    = NewAppError(http.StatusBadRequest, "validation", "turnstile verification failed")
+	ErrPasswordPayload    = NewAppError(http.StatusBadRequest, "validation", "invalid password payload")
 	ErrMustChangePassword = NewAppError(http.StatusForbidden, "must_change_password", "password must be changed")
 	ErrProfileIncomplete  = NewAppError(http.StatusForbidden, "profile_incomplete", "profile incomplete")
 	ErrEmailTaken         = NewAppError(http.StatusConflict, "conflict", "email already registered")
@@ -35,6 +36,12 @@ var (
 	ErrInvalidToken       = NewAppError(http.StatusBadRequest, "validation", "invalid or expired token")
 	ErrUnavailable        = NewAppError(http.StatusServiceUnavailable, "internal", "service unavailable")
 	ErrNotUnclaimed       = NewAppError(http.StatusConflict, "conflict", "email already registered")
+	ErrInvalidOTP         = NewAppError(http.StatusUnauthorized, "invalid_otp", "invalid or expired code")
+	ErrOTPRateLimited     = NewAppError(http.StatusTooManyRequests, "otp_rate_limited", "too many attempts")
+	ErrOTPResendWait      = NewAppError(http.StatusTooManyRequests, "otp_resend_wait", "wait before requesting another code")
+	ErrEmailUnverified    = NewAppError(http.StatusForbidden, "email_unverified", "email is not verified")
+	ErrOTPPurpose         = NewAppError(http.StatusBadRequest, "validation", "invalid otp purpose")
+	ErrOTPRequired        = NewAppError(http.StatusBadRequest, "validation", "otp code required")
 )
 
 func IsAppError(err error) (*AppError, bool) {

@@ -37,6 +37,17 @@ type Artist struct {
 	DistrictCode         *string    `json:"district_code"`
 }
 
+type EmailOtp struct {
+	ID             uuid.UUID          `json:"id"`
+	EmailCanonical string             `json:"email_canonical"`
+	Purpose        string             `json:"purpose"`
+	CodeHash       string             `json:"code_hash"`
+	ExpiresAt      time.Time          `json:"expires_at"`
+	ConsumedAt     pgtype.Timestamptz `json:"consumed_at"`
+	AttemptCount   int32              `json:"attempt_count"`
+	CreatedAt      time.Time          `json:"created_at"`
+}
+
 type PasswordToken struct {
 	ID        uuid.UUID          `json:"id"`
 	UserID    uuid.UUID          `json:"user_id"`
@@ -48,14 +59,15 @@ type PasswordToken struct {
 }
 
 type User struct {
-	ID                 uuid.UUID `json:"id"`
-	Email              string    `json:"email"`
-	PasswordHash       *string   `json:"password_hash"`
-	Role               string    `json:"role"`
-	Handle             string    `json:"handle"`
-	MustChangePassword bool      `json:"must_change_password"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ID                 uuid.UUID          `json:"id"`
+	Email              string             `json:"email"`
+	PasswordHash       *string            `json:"password_hash"`
+	Role               string             `json:"role"`
+	Handle             string             `json:"handle"`
+	MustChangePassword bool               `json:"must_change_password"`
+	CreatedAt          time.Time          `json:"created_at"`
+	UpdatedAt          time.Time          `json:"updated_at"`
+	EmailVerifiedAt    pgtype.Timestamptz `json:"email_verified_at"`
 }
 
 type Vendor struct {

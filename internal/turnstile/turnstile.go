@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -45,8 +47,8 @@ func (v *Verifier) Verify(ctx context.Context, token, remoteIP string) error {
 	form := url.Values{}
 	form.Set("secret", v.secret)
 	form.Set("response", token)
-	if remoteIP != "" {
-		form.Set("remoteip", remoteIP)
+	if ip := sanitizeRemoteIP(remoteIP); ip != "" {
+		form.Set("remoteip", ip)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, v.url, strings.NewReader(form.Encode()))
@@ -70,10 +72,32 @@ func (v *Verifier) Verify(ctx context.Context, token, remoteIP string) error {
 		return fmt.Errorf("turnstile: decode: %w", err)
 	}
 	if !body.Success {
+		slog.Warn("turnstile siteverify failed", "error-codes", body.Errors, "action", body.Action)
 		return domain.ErrTurnstileFailed
 	}
 	if v.expectedAction != "" && body.Action != "" && body.Action != v.expectedAction {
 		return domain.ErrTurnstileFailed
 	}
 	return nil
+}
+
+func NewForTest(cfg *config.Config, siteverifyURL string) *Verifier {
+	v := New(cfg)
+	v.url = siteverifyURL
+	return v
+}
+
+func sanitizeRemoteIP(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(s); err == nil {
+		s = host
+	}
+	ip := net.ParseIP(s)
+	if ip == nil {
+		return ""
+	}
+	return ip.String()
 }

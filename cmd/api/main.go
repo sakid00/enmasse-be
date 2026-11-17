@@ -17,6 +17,7 @@ import (
 	"github.com/sakid00/enmasse-be/internal/config"
 	apphttp "github.com/sakid00/enmasse-be/internal/http"
 	"github.com/sakid00/enmasse-be/internal/mail"
+	"github.com/sakid00/enmasse-be/internal/passwrap"
 	"github.com/sakid00/enmasse-be/internal/service"
 	"github.com/sakid00/enmasse-be/internal/store"
 	"github.com/sakid00/enmasse-be/internal/turnstile"
@@ -60,7 +61,30 @@ func main() {
 	}
 	sqlDB.Close()
 
-	authSvc := service.NewAuthService(db, cfg, turnstile.New(cfg), mail.New(cfg))
+	mailer, err := mail.New(cfg)
+	if err != nil {
+		slog.Error("mailer", "err", err)
+		os.Exit(1)
+	}
+	wrapPEM, err := cfg.WrapPrivateKeyPEM()
+	if err != nil {
+		slog.Error("password wrap key", "err", err)
+		os.Exit(1)
+	}
+	wrap, err := passwrap.New(wrapPEM, !cfg.IsProduction())
+	if err != nil {
+		slog.Error("password wrap key", "err", err)
+		os.Exit(1)
+	}
+	if wrap.Generated() {
+		slog.Warn("password wrap: generated ephemeral RSA key; set PASSWORD_WRAP_PRIVATE_KEY_FILE to persist across restarts")
+	}
+	if cfg.IsDummyTurnstile() {
+		slog.Info("turnstile: dummy always-pass secret")
+	} else if cfg.TurnstileSecretLooksLikeSiteKey() {
+		slog.Warn("turnstile: TURNSTILE_SECRET_KEY looks like a widget site key; Siteverify will fail. Use the Cloudflare secret, or the dummy 1x0000000000000000000000000000000AA locally")
+	}
+	authSvc := service.NewAuthService(db, cfg, turnstile.New(cfg), mailer, wrap)
 	handler := apphttp.NewRouter(authSvc, apphttp.RouterOptions{
 		CORSOrigins:      cfg.CORSOrigins,
 		JWTAccessSecret:  cfg.JWTAccessSecret,

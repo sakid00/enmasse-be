@@ -15,6 +15,7 @@ import (
 	"github.com/sakid00/enmasse-be/internal/config"
 	"github.com/sakid00/enmasse-be/internal/domain"
 	"github.com/sakid00/enmasse-be/internal/mail"
+	"github.com/sakid00/enmasse-be/internal/passwrap"
 	"github.com/sakid00/enmasse-be/internal/store"
 	"github.com/sakid00/enmasse-be/internal/turnstile"
 )
@@ -23,27 +24,50 @@ type AuthService struct {
 	db        *store.DB
 	cfg       *config.Config
 	turnstile *turnstile.Verifier
-	mail      mail.Sender
+	mail      mail.Mailer
+	wrap      *passwrap.Box
 }
 
-func NewAuthService(db *store.DB, cfg *config.Config, ts *turnstile.Verifier, mailer mail.Sender) *AuthService {
-	return &AuthService{db: db, cfg: cfg, turnstile: ts, mail: mailer}
+func NewAuthService(db *store.DB, cfg *config.Config, ts *turnstile.Verifier, mailer mail.Mailer, wrap *passwrap.Box) *AuthService {
+	return &AuthService{db: db, cfg: cfg, turnstile: ts, mail: mailer, wrap: wrap}
+}
+
+func (s *AuthService) PasswordPublicJWK() (passwrap.PublicJWK, error) {
+	if s == nil || s.wrap == nil {
+		return passwrap.PublicJWK{}, domain.ErrUnavailable
+	}
+	return s.wrap.PublicJWK(), nil
+}
+
+func (s *AuthService) UnwrapPassword(plain, cipher string) (string, error) {
+	cipher = strings.TrimSpace(cipher)
+	if cipher == "" {
+		return plain, nil
+	}
+	if s == nil || s.wrap == nil {
+		return "", domain.ErrPasswordPayload
+	}
+	out, err := s.wrap.Unwrap(cipher)
+	if err != nil {
+		return "", domain.ErrPasswordPayload
+	}
+	return out, nil
 }
 
 type RegisterArtistInput struct {
-	Email      string
-	Password   string
-	FirstName  string
-	LastName   string
-	ArtistName string
-	Handle     string
+	SignupToken string
+	Password    string
+	FirstName   string
+	LastName    string
+	ArtistName  string
+	Handle      string
 }
 
 type RegisterVendorInput struct {
-	Email    string
-	Password string
-	Handle   string
-	Name     string
+	SignupToken string
+	Password    string
+	Handle      string
+	Name        string
 }
 
 type Session struct {
@@ -54,14 +78,19 @@ type Session struct {
 }
 
 type UserView struct {
-	ID     string `json:"id"`
-	Email  string `json:"email"`
-	Handle string `json:"handle"`
-	Role   string `json:"role"`
+	ID            string `json:"id"`
+	Email         string `json:"email"`
+	Handle        string `json:"handle"`
+	Role          string `json:"role"`
+	EmailVerified bool   `json:"emailVerified"`
 }
 
 func (s *AuthService) RegisterArtist(ctx context.Context, in RegisterArtistInput) (*Session, error) {
-	email, handle, err := validateNewAccount(in.Email, in.Handle, in.Password)
+	email, err := s.emailFromSignupToken(in.SignupToken)
+	if err != nil {
+		return nil, err
+	}
+	_, handle, err := validateNewAccount(email, in.Handle, in.Password)
 	if err != nil {
 		return nil, err
 	}
@@ -102,14 +131,26 @@ func (s *AuthService) RegisterArtist(ctx context.Context, in RegisterArtistInput
 	}); err != nil {
 		return nil, fmt.Errorf("register artist: artist: %w", err)
 	}
+	if err := q.MarkEmailVerified(ctx, user.ID); err != nil {
+		return nil, fmt.Errorf("register artist: verify: %w", err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("register artist: commit: %w", err)
 	}
-	return s.session(user, false)
+	user.EmailVerifiedAt = verifiedNow()
+	complete, err := s.profileComplete(ctx, user)
+	if err != nil {
+		return nil, err
+	}
+	return s.session(user, complete)
 }
 
 func (s *AuthService) RegisterVendor(ctx context.Context, in RegisterVendorInput) (*Session, error) {
-	email, handle, err := validateNewAccount(in.Email, in.Handle, in.Password)
+	email, err := s.emailFromSignupToken(in.SignupToken)
+	if err != nil {
+		return nil, err
+	}
+	_, handle, err := validateNewAccount(email, in.Handle, in.Password)
 	if err != nil {
 		return nil, err
 	}
@@ -149,9 +190,13 @@ func (s *AuthService) RegisterVendor(ctx context.Context, in RegisterVendorInput
 	}); err != nil {
 		return nil, fmt.Errorf("register vendor: vendor: %w", err)
 	}
+	if err := q.MarkEmailVerified(ctx, user.ID); err != nil {
+		return nil, fmt.Errorf("register vendor: verify: %w", err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("register vendor: commit: %w", err)
 	}
+	user.EmailVerifiedAt = verifiedNow()
 	complete, err := s.profileComplete(ctx, user)
 	if err != nil {
 		return nil, err
@@ -213,14 +258,15 @@ func (s *AuthService) EmailStatus(ctx context.Context, raw string) (*EmailStatus
 	return &EmailStatus{Status: EmailRegistered}, nil
 }
 
-func (s *AuthService) ClaimPassword(ctx context.Context, raw, password string) (*Session, error) {
+func (s *AuthService) ClaimPassword(ctx context.Context, raw, password, code string) (*Session, error) {
 	if !domain.LooksLikeEmail(raw) {
 		return nil, domain.ErrInvalidEmail
 	}
 	if len(password) < 8 {
 		return nil, domain.ErrWeakPassword
 	}
-	user, err := s.db.Queries.GetUserByEmail(ctx, domain.CanonicalEmail(raw))
+	email := domain.CanonicalEmail(raw)
+	user, err := s.db.Queries.GetUserByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrNotFound
@@ -229,6 +275,9 @@ func (s *AuthService) ClaimPassword(ctx context.Context, raw, password string) (
 	}
 	if user.PasswordHash != nil {
 		return nil, domain.ErrNotUnclaimed
+	}
+	if err := s.consumeOTP(ctx, email, domain.OTPClaim, code); err != nil {
+		return nil, err
 	}
 	hash, err := auth.Hash(password)
 	if err != nil {
@@ -241,7 +290,11 @@ func (s *AuthService) ClaimPassword(ctx context.Context, raw, password string) (
 	}); err != nil {
 		return nil, fmt.Errorf("claim password: update: %w", err)
 	}
+	if err := s.db.Queries.MarkEmailVerified(ctx, user.ID); err != nil {
+		return nil, fmt.Errorf("claim password: verify: %w", err)
+	}
 	user.PasswordHash = &hash
+	user.EmailVerifiedAt = verifiedNow()
 	complete, err := s.profileComplete(ctx, user)
 	if err != nil {
 		return nil, err
@@ -320,6 +373,9 @@ func (s *AuthService) SetPassword(ctx context.Context, token, password string) e
 	if err := s.db.Queries.MarkTokenUsed(ctx, row.ID); err != nil {
 		return fmt.Errorf("set password: mark: %w", err)
 	}
+	if err := s.db.Queries.MarkEmailVerified(ctx, row.UserID); err != nil {
+		return fmt.Errorf("set password: verify: %w", err)
+	}
 	return nil
 }
 
@@ -330,6 +386,9 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID uuid.UUID, curr
 	user, err := s.db.Queries.GetUserByID(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("change password: %w", err)
+	}
+	if err := s.requireVerified(user); err != nil {
+		return err
 	}
 	if user.PasswordHash == nil || !auth.Verify(*user.PasswordHash, current) {
 		return domain.ErrUnauthorized
@@ -354,12 +413,7 @@ func (s *AuthService) session(user store.User, complete bool) (*Session, error) 
 		AccessToken:     tok,
 		ExpiresIn:       int(s.cfg.JWTAccessExpiry.Seconds()),
 		ProfileComplete: complete,
-		User: UserView{
-			ID:     user.ID.String(),
-			Email:  user.Email,
-			Handle: user.Handle,
-			Role:   user.Role,
-		},
+		User:            userView(user),
 	}, nil
 }
 
